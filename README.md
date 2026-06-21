@@ -38,7 +38,10 @@ The Landis+Gyr E450 smart meter deployed by EAC (Electricity Authority of Cyprus
 - Frequency (Hz)
 
 **Important prerequisites:**
-- You must contact EAC to request activation of the M-Bus data push interface on your specific meter. The port is physically present but disabled by default.
+- Provided your meter was replaced by a Landis-Gyr one post mid-2025 the communication port should be enabled by default. If you test this code and it results are:
+                AxdrParser: done, 0 objects found, 59/59 bytes consumed
+                No COSEM objects found in AXDR payload
+then you must contact EAC to request activation of the M-Bus data push interface on your specific meter. The port is physically present but disabled.
 - EAC may take several days to push the configuration update remotely.
 
 ---
