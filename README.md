@@ -30,19 +30,23 @@ The Landis+Gyr E450 smart meter deployed by EAC (Electricity Authority of Cyprus
 **What you get in Home Assistant:**
 - Live grid power import/export (W)
 - Total energy import/export (kWh) — feeds HA Energy Dashboard
-- Reactive power import/export (VAr)
-- Reactive energy totals (kVArh)
-- Voltage L1 (V)
-- Current L1 (A)
+- Reactive power import/export (VAr) and reactive energy totals (kVArh)
+- Voltage L1/L2/L3 (V)
+- Current L1/L2/L3 (A)
 - Power Factor
 - Frequency (Hz)
 
+> Single phase installations (most residential EAC customers) can simply remove the L2 and L3 sensors — all sections are clearly marked in the YAML.
+
 **Important prerequisites:**
-- Provided your meter was replaced by a Landis-Gyr one post mid-2025 the communication port should be enabled by default. If you test this code and it's logs are like this:
-                AxdrParser: done, 0 objects found, 59/59 bytes consumed
-                No COSEM objects found in AXDR payload
-then you must contact EAC to request activation of the M-Bus data push interface on your specific meter. The port is physically present but disabled.
-- EAC may take several days to push the configuration update remotely.
+
+- Meters replaced by EAC post mid-2025 may have the M-Bus communication port enabled by default. Flash the firmware and check your logs. If you see:
+  ```
+  AxdrParser: done, 0 objects found, 59/59 bytes consumed
+  No COSEM objects found in AXDR payload
+  ```
+  then you must contact EAC to request activation of the M-Bus data push interface on your specific meter. The port is physically present on all E450 meters but may be disabled by default depending on when it was installed.
+- EAC may take several days to push the configuration update remotely to your meter.
 
 ---
 
@@ -53,12 +57,13 @@ then you must contact EAC to request activation of the M-Bus data push interface
 | ESP32-C6 SuperMini | Any ESP32-C6 board works but pin numbers may differ |
 | M-Bus Slave to TTL converter | The common Chinese green PCB module with EL817 optocouplers and FC722/TSS721 IC |
 | RJ11 cable | Middle two pins wired only (pins 3 and 4) |
-| Power supply | USB-C 5V for testing; see Power Saving section for battery |
+| Power supply | USB-C 5V for testing; see [Power Saving](#power-saving-optional) for permanent install |
 
 **M-Bus module notes:**
-- The module requires **5V input** on VCC (not 3.3V) — use the ESP32's 5V pin when powered via USB
-- M-Bus terminals are polarity-insensitive — swap if no signal
-- The module generates the ~24V M-Bus voltage internally from 5V input
+- The module requires **5V input** on VCC — use the ESP32's 5V pin when powered via USB-C
+- M-Bus terminals are polarity-insensitive — if you get no signal, swap the two wires
+- The module generates the ~24V M-Bus voltage internally from the 5V input
+- The meter's RJ12 socket accepts a standard RJ11 plug — only the middle two pins are needed
 
 ---
 
@@ -67,18 +72,18 @@ then you must contact EAC to request activation of the M-Bus data push interface
 ```
 Landis+Gyr E450 Meter
         │
-    RJ11/RJ12
+    RJ11 into RJ12 socket
     (middle 2 pins, polarity insensitive)
         │
-┌───────────────┐
-│  M-Bus TTL    │
-│  Converter    │
-│               │
-│  VCC ─────── ESP32 5V pin
-│  GND ─────── ESP32 GND
-│  TXD ─────── ESP32 GPIO17 (RX)
-│  RXD ─────── ESP32 GPIO16 (TX)
-└───────────────┘
+┌───────────────────┐
+│  M-Bus TTL        │
+│  Converter Module │
+│                   │
+│  VCC ─────────── ESP32 5V pin
+│  GND ─────────── ESP32 GND
+│  TXD ─────────── ESP32 GPIO17 (RX)
+│  RXD ─────────── ESP32 GPIO16 (TX)
+└───────────────────┘
 ```
 
 **Pin mapping (ESP32-C6 SuperMini):**
@@ -90,7 +95,7 @@ Landis+Gyr E450 Meter
 | TXD | GPIO17 |
 | RXD | GPIO16 |
 
-> **Note:** TX/RX are swapped relative to what you might expect. If you get no data, swap GPIO16 and GPIO17.
+> **Note:** TX and RX are swapped relative to standard convention on this module. If you get no data at all, try swapping GPIO16 and GPIO17 in your YAML first before changing anything else.
 
 ---
 
@@ -100,12 +105,12 @@ Landis+Gyr E450 Meter
 
 You need **ESPHome 2026.6.0 or later** which includes the native `dlms_meter` component.
 
-- **ESPHome Device Builder (Desktop app):** Download from [esphome.io](https://esphome.io). Switch to the **beta channel** in the system tray if the stable channel hasn't updated yet.
-- **Home Assistant Add-on:** Update via Settings → Add-ons → ESPHome.
+- **ESPHome Device Builder (Desktop app):** Download from [esphome.io](https://esphome.io). If the stable channel still shows an older version, switch to the **beta channel** via the system tray icon.
+- **Home Assistant Add-on:** Update via Settings → Add-ons → ESPHome → Update.
 
 ### 2. Critical: ESPHome PR Fix
 
-The standard `dlms_meter` component does not correctly parse the specific HDLC frame format used by the Cyprus E450 meter. You must include the fix from ESPHome PR #16942 in your configuration:
+The standard `dlms_meter` component does not correctly parse the specific HDLC frame variant used by the Cyprus E450 meter. Without this fix, all sensor values will read as zero even when the meter is broadcasting correctly. Add the following block to your configuration:
 
 ```yaml
 external_components:
@@ -114,189 +119,77 @@ external_components:
     refresh: 1s
 ```
 
-> Once PR #16942 is merged into ESPHome mainline, this `external_components` block can be removed.
+> Once [PR #16942](https://github.com/esphome/esphome/pull/16942) is merged into ESPHome mainline, this `external_components` block can be removed.
 
 ### 3. secrets.yaml
 
-Add to your `secrets.yaml`:
+Add the following to your `secrets.yaml` file:
+
 ```yaml
 wifi_ssid: "YourWiFiSSID"
 wifi_password: "YourWiFiPassword"
 landis_api_encryption_key: "YourGeneratedEncryptionKey"
 ```
 
-Generate an encryption key in ESPHome Device Builder when creating the device.
+Generate an API encryption key in ESPHome Device Builder when creating the device, or use the one from an existing device.
 
 ---
 
 ## ESPHome Configuration
 
-Save as `landis-meter.yaml`:
+Two YAML files are provided in this repository:
 
-```yaml
-esphome:
-  name: landis-meter
-  friendly_name: Landis+Gyr E450
+| File | Use case |
+|---|---|
+| `landis-meter-single-phase.yaml` | Single phase installations (most EAC residential customers) |
+| `landis-meter-three-phase.yaml` | Three phase installations — includes L2/L3 voltage and current sensors |
 
-esp32:
-  board: esp32-c6-devkitc-1
-  framework:
-    type: esp-idf
+Both files use the same architecture: raw internal DLMS sensors with scaling applied via template sensors visible in Home Assistant.
 
-# Required fix for Cyprus E450 HDLC frame format
-external_components:
-  - source: github://pr#16942
-    components: [dlms_meter]
-    refresh: 1s
+**Confirmed working parameters for EAC Cyprus Landis+Gyr E450:**
 
-logger:
-  level: DEBUG
+| Parameter | Value |
+|---|---|
+| Baud rate | 2400 bps |
+| Parity | NONE |
+| Data bits | 8 |
+| Stop bits | 1 |
+| Frame format | HDLC (Cyprus-specific variant — requires PR #16942) |
+| Encryption | None |
+| Push interval | ~5 seconds |
 
-wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
-  power_save_mode: none
-  fast_connect: true
+**Scaling factors confirmed for this meter:**
 
-api:
-  encryption:
-    key: !secret landis_api_encryption_key
-
-ota:
-  - platform: esphome
-
-uart:
-  id: mbus_uart
-  tx_pin: GPIO16
-  rx_pin: GPIO17
-  baud_rate: 2400
-  rx_buffer_size: 2048
-  data_bits: 8
-  parity: NONE
-  stop_bits: 1
-
-dlms_meter:
-  uart_id: mbus_uart
-
-sensor:
-  - platform: dlms_meter
-    obis_code: "1-0:1.7.0"
-    name: "Grid Power Import"
-    unit_of_measurement: W
-    device_class: power
-    state_class: measurement
-    accuracy_decimals: 1
-
-  - platform: dlms_meter
-    obis_code: "1-0:2.7.0"
-    name: "Grid Power Export"
-    unit_of_measurement: W
-    device_class: power
-    state_class: measurement
-    accuracy_decimals: 1
-
-  - platform: dlms_meter
-    obis_code: "1-0:1.8.0"
-    name: "Grid Energy Import Total"
-    unit_of_measurement: kWh
-    device_class: energy
-    state_class: total_increasing
-    accuracy_decimals: 3
-
-  - platform: dlms_meter
-    obis_code: "1-0:2.8.0"
-    name: "Grid Energy Export Total"
-    unit_of_measurement: kWh
-    device_class: energy
-    state_class: total_increasing
-    accuracy_decimals: 3
-
-  - platform: dlms_meter
-    obis_code: "1-0:3.7.0"
-    name: "Reactive Power Import"
-    unit_of_measurement: VAr
-    device_class: reactive_power
-    state_class: measurement
-    accuracy_decimals: 1
-
-  - platform: dlms_meter
-    obis_code: "1-0:4.7.0"
-    name: "Reactive Power Export"
-    unit_of_measurement: VAr
-    device_class: reactive_power
-    state_class: measurement
-    accuracy_decimals: 1
-
-  - platform: dlms_meter
-    obis_code: "1-0:3.8.0"
-    name: "Reactive Energy Import Total"
-    unit_of_measurement: kVArh
-    device_class: reactive_energy
-    state_class: total_increasing
-    accuracy_decimals: 3
-
-  - platform: dlms_meter
-    obis_code: "1-0:4.8.0"
-    name: "Reactive Energy Export Total"
-    unit_of_measurement: kVArh
-    device_class: reactive_energy
-    state_class: total_increasing
-    accuracy_decimals: 3
-
-  - platform: dlms_meter
-    obis_code: "1-0:32.7.0"
-    name: "Voltage L1"
-    unit_of_measurement: V
-    device_class: voltage
-    state_class: measurement
-    accuracy_decimals: 1
-
-  - platform: dlms_meter
-    obis_code: "1-0:31.7.0"
-    name: "Current L1"
-    unit_of_measurement: A
-    device_class: current
-    state_class: measurement
-    accuracy_decimals: 2
-    filters:
-      - multiply: 0.01
-
-  - platform: dlms_meter
-    obis_code: "1-0:13.7.0"
-    name: "Power Factor"
-    device_class: power_factor
-    state_class: measurement
-    accuracy_decimals: 3
-    filters:
-      - multiply: 0.001
-
-  - platform: dlms_meter
-    obis_code: "1-0:14.7.0"
-    name: "Frequency"
-    unit_of_measurement: Hz
-    device_class: frequency
-    state_class: measurement
-    accuracy_decimals: 2
-    filters:
-      - multiply: 0.01
-```
+| Measurement | Raw unit | Scale factor | Final unit |
+|---|---|---|---|
+| Energy | Wh | × 0.001 | kWh |
+| Current | mA | × 0.01 | A |
+| Power Factor | ×1000 | × 0.001 | dimensionless |
+| Reactive Power | mVAr | × 0.001 | VAr |
+| Power / Voltage / Frequency | — | none | W / V / Hz |
 
 ---
 
 ## Home Assistant Integration
 
-Once flashed and connected, the device will appear automatically in Home Assistant via the ESPHome integration.
+Once flashed and connected, the device appears automatically in Home Assistant via the ESPHome integration.
 
 **Energy Dashboard setup:**
-- Go to Settings → Dashboards → Energy
-- Add `Grid Energy Import Total` as grid consumption
-- Add `Grid Energy Export Total` as grid return (for solar/netmetering)
+1. Go to Settings → Dashboards → Energy
+2. Under **Grid**, add:
+   - `Grid Energy Import Total` as **Grid consumption**
+   - `Grid Energy Export Total` as **Return to grid** (for solar/netmetering customers)
 
 ---
 
 ## Power Saving (Optional)
 
-For battery-powered installations, add deep sleep to reduce average current draw from ~150mA to ~37mA:
+For battery-powered installations, add deep sleep to reduce average current draw:
+
+- Always on (WiFi active): ~150mA → ~2.3 days on 10,000mAh
+- Deep sleep (25s on / 35s off): ~37mA average → ~9 days on 10,000mAh
+
+Add the following to your YAML:
 
 ```yaml
 deep_sleep:
@@ -304,7 +197,6 @@ deep_sleep:
   run_duration: 25s
   sleep_duration: 35s
 
-# Add this switch to allow OTA updates without physical access
 switch:
   - platform: template
     name: "Prevent Sleep"
@@ -317,69 +209,69 @@ switch:
       - deep_sleep.allow: deep_sleep_control
 ```
 
-**OTA update procedure with deep sleep enabled:**
-1. Watch for device to come online in HA (every 60 seconds)
-2. Immediately turn on **Prevent Sleep** switch
+**OTA update procedure with deep sleep active:**
+1. Watch for the device to come online in HA (reconnects every ~60 seconds)
+2. Immediately toggle **Prevent Sleep** switch ON during the wake window
 3. Flash OTA from ESPHome Device Builder
-4. Turn **Prevent Sleep** off when done
+4. Toggle **Prevent Sleep** OFF when complete
 
-**Battery life estimates (10,000mAh power bank):**
-- Deep sleep enabled: ~9 days
-- Always on: ~2.3 days
-
-> ⚠️ Power banks with auto-shutoff will cut power during deep sleep. Use a LiPo battery with TP4056 charger + MP1584 buck converter (set to 3.3V) for permanent installation.
+> ⚠️ **Power bank warning:** Most USB power banks have auto-shutoff protection that cuts power when current drops during deep sleep. For permanent installation use a LiPo battery with a TP4056 charger board and MP1584 buck converter set to 3.3V output.
 
 **Permanent battery wiring:**
 ```
-LiPo+ → TP4056 BAT+
-LiPo- → TP4056 BAT-
-TP4056 OUT+ → MP1584 IN+
-TP4056 OUT- → MP1584 IN-
-MP1584 OUT+ (3.3V) → ESP32 3V3 pin
-MP1584 OUT- → ESP32 GND
-MP1584 OUT+ (3.3V) → M-Bus module VCC (adjust module to accept 3.3V or use separate 5V source)
+LiPo+  →  TP4056 BAT+
+LiPo-  →  TP4056 BAT-
+TP4056 OUT+  →  MP1584 IN+
+TP4056 OUT-  →  MP1584 IN-
+MP1584 OUT+ (3.3V)  →  ESP32 3V3 pin
+MP1584 OUT- (GND)   →  ESP32 GND
+MP1584 OUT+ (3.3V)  →  M-Bus module VCC (or use separate 5V source for module)
 ```
 
 ---
 
 ## Troubleshooting
 
-### All sensors show Unknown
+### Sensors show Unknown
 - EAC has not yet activated the M-Bus push interface on your meter
-- Contact EAC and request M-Bus data push activation for your meter serial number
-- After activation, a meter power cycle may be required
+- Contact EAC and request M-Bus data push activation — provide your meter serial number
+- Check logs for: `No COSEM objects found in AXDR payload` which confirms port is inactive
+- After EAC pushes the update, a meter power cycle by EAC may be required
 
-### All sensors show 0
-- The `external_components` PR fix is not applied — the Cyprus E450 uses a specific HDLC frame format not supported by the standard component
-- Ensure your ESPHome version is 2026.6.0+
-- Check that `parity: NONE` is set (not EVEN)
+### Sensors show 0 for everything including voltage
+- The `external_components` PR #16942 fix is missing or not applied correctly
+- This is the most common issue — the standard `dlms_meter` component cannot parse the Cyprus E450 HDLC frame variant and returns zeros for all values
+- Verify `parity: NONE` (not EVEN)
+- Verify ESPHome version is 2026.6.0+
 
-### No data / complete silence in logs
-- Check M-Bus module VCC is receiving 5V
-- Measure M-Bus terminals — should be ~24V from meter
-- Try swapping TX/RX pins (GPIO16 ↔ GPIO17)
-- Verify RJ11 is firmly seated in meter RJ12 socket
+### No data at all / complete silence in logs
+- Check M-Bus module VCC is receiving 5V (not 3.3V)
+- Measure across M-Bus terminals — should read ~24V DC from the meter
+- Try swapping TX/RX pins (GPIO16 ↔ GPIO17) in your YAML
+- Confirm RJ11 plug is firmly seated in the meter's RJ12 socket
+- M-Bus terminals are polarity-insensitive — try swapping the two wires
 
-### WiFi disconnecting frequently
-- Add `fast_connect: true` to wifi config
-- Pin to a specific AP using `bssid:` if you have a mesh network
-- Avoid deep sleep if power bank cuts out during sleep
+### WiFi connecting and disconnecting repeatedly
+- Add `fast_connect: true` to your wifi config
+- On mesh/multi-AP networks, add `bssid: "XX:XX:XX:XX:XX:XX"` to pin to the nearest AP
+- Check router logs for roaming loop — the ESP32-C6 can trigger aggressive roaming on some mesh systems
 
-### OTA updates failing with deep sleep
-- Enable the Prevent Sleep switch before attempting OTA
-- Or connect USB-C directly for physical flash
+### OTA updates failing with deep sleep enabled
+- Turn on the **Prevent Sleep** switch during a wake window before triggering OTA
+- Alternatively connect USB-C directly for a physical flash
 
-### Energy totals show Unknown while other sensors work
-- Increase `run_duration` to 25s+ to catch all frame sequences
-- Energy totals are sometimes in a separate frame broadcast
+### Energy totals show Unknown while instantaneous sensors work
+- Increase `run_duration` to 25s or more — energy totals may arrive in a later frame
+- The meter broadcasts multiple frames per cycle; shorter wake windows may miss them
 
 ---
 
 ## Known Issues
 
-- **PR #16942 not yet merged:** The Cyprus E450 HDLC frame fix is in a pending ESPHome pull request. The `external_components` workaround is required until it merges.
-- **Deep sleep + power banks:** Most power banks auto-shutoff when current drops during deep sleep. Use a raw LiPo for permanent installs.
-- **EAC activation required:** The M-Bus port must be explicitly enabled by EAC per meter. This is not automatic.
+- **PR #16942 not yet merged:** The Cyprus E450 HDLC frame fix is in a pending ESPHome pull request. The `external_components` workaround is required until it merges into mainline. Track progress at [github.com/esphome/esphome/pull/16942](https://github.com/esphome/esphome/pull/16942).
+- **Deep sleep + power banks:** Most power banks auto-shutoff during deep sleep. Use a raw LiPo for permanent installs.
+- **EAC activation:** The M-Bus port must be explicitly enabled by EAC on older meter installations. Newer meters (post mid-2025) may have it enabled by default.
+- **Three phase L2/L3 sensors:** Not tested by the original author (single phase installation). Community feedback welcome.
 
 ---
 
@@ -394,22 +286,22 @@ MP1584 OUT+ (3.3V) → M-Bus module VCC (adjust module to accept 3.3V or use sep
 | Data bits | 8 |
 | Stop bits | 1 |
 | Frame format | HDLC (Cyprus-specific variant) |
-| Encryption | None (EAC Cyprus does not encrypt) |
+| Encryption | None |
 | Push interval | ~5 seconds |
-| ESPHome version | 2026.6.0+ |
+| ESPHome version | 2026.6.0b1+ |
 | ESP32 board | ESP32-C6 SuperMini |
 
 ---
 
 ## Credits
 
-- ESPHome PR #16942 by [@PolarGoose](https://github.com/PolarGoose) — Cyprus E450 HDLC frame format fix
-- ESPHome `dlms_meter` component team
-- EAC Cyprus engineering team for technical assistance
-- Home Assistant community
+- [PR #16942](https://github.com/esphome/esphome/pull/16942) by [@PolarGoose](https://github.com/PolarGoose) — Cyprus E450 HDLC frame format fix without which this would not work
+- ESPHome `dlms_meter` component contributors
+- EAC Cyprus engineering team for technical assistance during testing
+- Home Assistant and ESPHome communities
 
 ---
 
 ## License
 
-MIT License — free to use, modify and share. If this helped you, consider opening a PR or leaving a star ⭐
+MIT — free to use, modify and share with attribution. If this project helped you, consider opening a PR, leaving a ⭐, or posting your experience in the ESPHome community forums.
