@@ -30,11 +30,13 @@ The Landis+Gyr E450 smart meter deployed by EAC (Electricity Authority of Cyprus
 **What you get in Home Assistant:**
 - Live grid power import/export (W)
 - Total energy import/export (kWh) — feeds HA Energy Dashboard
+- Per-tariff energy totals — Tariff 1 and Tariff 2 import/export (kWh)
 - Reactive power import/export (VAr) and reactive energy totals (kVArh)
 - Voltage L1/L2/L3 (V)
 - Current L1/L2/L3 (A)
-- Power Factor
-- Frequency (Hz)
+- Power Factor and Frequency (Hz)
+- Meter Device ID, Serial Number, Active Tariff name
+- Meter Breaker status (connected/disconnected by utility)
 
 > Single phase installations (most residential EAC customers) can simply remove the L2 and L3 sensors — all sections are clearly marked in the YAML.
 
@@ -146,7 +148,17 @@ Two YAML files are provided in this repository:
 
 Both files use the same architecture: raw internal DLMS sensors with scaling applied via template sensors visible in Home Assistant.
 
-**Confirmed working parameters for EAC Cyprus Landis+Gyr E450:**
+### Meter Frame Structure
+
+The EAC Cyprus E450 broadcasts three distinct frame types:
+
+| Frame | Interval | Size | Contents |
+|---|---|---|---|
+| Frame 1 | Every 5 seconds | ~600 bytes | Instantaneous power, voltage, current, frequency, power factor, reactive power |
+| Frame 2 | Every ~10 seconds | ~600 bytes | Energy totals, reactive energy totals, breaker status, device info |
+| Frame 3 | Every minute | ~1057 bytes | Full billing dataset including per-tariff cumulative energy totals |
+
+### Confirmed Working Parameters
 
 | Parameter | Value |
 |---|---|
@@ -156,17 +168,48 @@ Both files use the same architecture: raw internal DLMS sensors with scaling app
 | Stop bits | 1 |
 | Frame format | HDLC (Cyprus-specific variant — requires PR #16942) |
 | Encryption | None |
-| Push interval | ~5 seconds |
+| receive_timeout | 1500ms (prevents spurious timeout warnings at minute boundaries) |
 
-**Scaling factors confirmed for this meter:**
+### Scaling Factors
 
 | Measurement | Raw unit | Scale factor | Final unit |
 |---|---|---|---|
 | Energy | Wh | × 0.001 | kWh |
+| Reactive Energy | VArh | × 0.001 | kVArh |
 | Current | mA | × 0.01 | A |
 | Power Factor | ×1000 | × 0.001 | dimensionless |
 | Reactive Power | mVAr | × 0.001 | VAr |
 | Power / Voltage / Frequency | — | none | W / V / Hz |
+
+### Complete OBIS Code Reference
+
+| OBIS Code | Description | Frame | Update Rate |
+|---|---|---|---|
+| `1-0:1.7.0` | Active power import | 1 | 5s |
+| `1-0:2.7.0` | Active power export | 1 | 5s |
+| `1-0:3.7.0` | Reactive power import | 1 | 5s |
+| `1-0:4.7.0` | Reactive power export | 1 | 5s |
+| `1-0:32.7.0` | Voltage L1 | 1 | 5s |
+| `1-0:31.7.0` | Current L1 | 1 | 5s |
+| `1-0:52.7.0` | Voltage L2 *(3-phase only)* | 1 | 5s |
+| `1-0:51.7.0` | Current L2 *(3-phase only)* | 1 | 5s |
+| `1-0:72.7.0` | Voltage L3 *(3-phase only)* | 1 | 5s |
+| `1-0:71.7.0` | Current L3 *(3-phase only)* | 1 | 5s |
+| `1-0:13.7.0` | Power factor | 1 | 5s |
+| `1-0:14.7.0` | Frequency | 1 | 5s |
+| `0-0:96.3.0.255` | Disconnect control status | 1 | 5s |
+| `1-0:1.8.0` | Total energy import | 2 | 10s |
+| `1-0:2.8.0` | Total energy export | 2 | 10s |
+| `1-0:3.8.0` | Total reactive energy import | 2 | 10s |
+| `1-0:4.8.0` | Total reactive energy export | 2 | 10s |
+| `0-0:96.3.10.255` | Breaker status | 2 | 10s |
+| `0-0:42.0.0.255` | Meter device ID | 3 | 1 min |
+| `0-0:96.1.1.255` | Meter serial number | 3 | 1 min |
+| `0-0:96.14.0.255` | Active tariff profile | 3 | 1 min |
+| `1-0:1.8.1` | Energy import Tariff 1 | 3 | 1 min |
+| `1-0:1.8.2` | Energy import Tariff 2 | 3 | 1 min |
+| `1-0:2.8.1` | Energy export Tariff 1 | 3 | 1 min |
+| `1-0:2.8.2` | Energy export Tariff 2 | 3 | 1 min |
 
 ---
 
@@ -239,8 +282,8 @@ MP1584 OUT+ (3.3V)  →  M-Bus module VCC (or use separate 5V source for module)
 - After EAC pushes the update, a meter power cycle by EAC may be required
 
 ### Sensors show 0 for everything including voltage
-- The `external_components` PR #16942 fix is missing or not applied correctly
-- This is the most common issue — the standard `dlms_meter` component cannot parse the Cyprus E450 HDLC frame variant and returns zeros for all values
+- The `external_components` PR #16942 fix is missing or not applied correctly — this is the most common issue
+- The standard `dlms_meter` component cannot parse the Cyprus E450 HDLC frame variant and returns zeros for all values
 - Verify `parity: NONE` (not EVEN)
 - Verify ESPHome version is 2026.6.0+
 
@@ -251,6 +294,10 @@ MP1584 OUT+ (3.3V)  →  M-Bus module VCC (or use separate 5V source for module)
 - Confirm RJ11 plug is firmly seated in the meter's RJ12 socket
 - M-Bus terminals are polarity-insensitive — try swapping the two wires
 
+### Timeout warnings appearing every minute in logs
+- This is caused by the large 1057-byte billing frame at minute boundaries
+- Add `receive_timeout: 1500ms` to the `dlms_meter:` block — already included in the provided YAMLs
+
 ### WiFi connecting and disconnecting repeatedly
 - Add `fast_connect: true` to your wifi config
 - On mesh/multi-AP networks, add `bssid: "XX:XX:XX:XX:XX:XX"` to pin to the nearest AP
@@ -260,9 +307,10 @@ MP1584 OUT+ (3.3V)  →  M-Bus module VCC (or use separate 5V source for module)
 - Turn on the **Prevent Sleep** switch during a wake window before triggering OTA
 - Alternatively connect USB-C directly for a physical flash
 
-### Energy totals show Unknown while instantaneous sensors work
-- Increase `run_duration` to 25s or more — energy totals may arrive in a later frame
-- The meter broadcasts multiple frames per cycle; shorter wake windows may miss them
+### Per-tariff energy totals show Unknown while other sensors work
+- Tariff totals arrive in the minute frame (Frame 3) — they only update once per minute
+- If using deep sleep, ensure `run_duration` is long enough to catch the minute frame occasionally
+- The device must be awake at a minute boundary to receive Frame 3
 
 ---
 
@@ -287,7 +335,7 @@ MP1584 OUT+ (3.3V)  →  M-Bus module VCC (or use separate 5V source for module)
 | Stop bits | 1 |
 | Frame format | HDLC (Cyprus-specific variant) |
 | Encryption | None |
-| Push interval | ~5 seconds |
+| Push interval | ~5 seconds (Frame 1), ~10 seconds (Frame 2), ~60 seconds (Frame 3) |
 | ESPHome version | 2026.6.0b1+ |
 | ESP32 board | ESP32-C6 SuperMini |
 
