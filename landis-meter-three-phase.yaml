@@ -8,15 +8,17 @@ esp32:
     type: esp-idf
 
 # ============================================================
-# REQUIRED: Fix for Cyprus E450 HDLC frame format
-# Without this, all sensor values will read as zero.
-# Remove this block once PR #16942 is merged into ESPHome:
-# https://github.com/esphome/esphome/pull/16942
+# ESPHome 2026.11.0 or newer is required.
+# Cyprus E450 HDLC support (PR #16942) is built in from 2026.11.0,
+# so NO external_components block is needed.
+#
+# Only if you are stuck on ESPHome 2026.6.0 - 2026.10.x, uncomment:
+#
+# external_components:
+#   - source: github://pr#16942
+#     components: [dlms_meter]
+#     refresh: 1s
 # ============================================================
-external_components:
-  - source: github://pr#16942
-    components: [dlms_meter]
-    refresh: 1s
 
 logger:
   level: DEBUG
@@ -62,9 +64,16 @@ uart:
   stop_bits: 1
 
 # ============================================================
-# receive_timeout increased to 1500ms to prevent spurious
-# timeout warnings in the log at each minute boundary when
-# the larger 1057-byte billing frame arrives.
+# receive_timeout: 1500ms is the value tested on the EAC Cyprus
+# E450 (it pushes every 5 seconds). Do NOT raise it to 4000ms:
+# on this meter that merges consecutive transmissions and causes
+# "RX Buffer overflow - Frame too large" errors.
+#
+# Expect one harmless HDLC warning roughly once a minute
+# (e.g. "HDLC: incomplete frame" / "invalid frame" / "FCS error").
+# The meter has two uncoordinated push schedulers that collide
+# once a minute. Sensors keep updating; there is no fix on the
+# ESPHome side. See the README for details.
 # ============================================================
 dlms_meter:
   uart_id: mbus_uart

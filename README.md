@@ -1,7 +1,7 @@
 # Landis+Gyr E450 Smart Meter Reader for Home Assistant
 ### ESPHome DLMS/M-Bus integration for Cyprus (EAC) smart meters
 
-![ESPHome](https://img.shields.io/badge/ESPHome-2026.6.0+-blue)
+![ESPHome](https://img.shields.io/badge/ESPHome-2026.11.0+-blue)
 ![ESP32-C6](https://img.shields.io/badge/ESP32-C6%20SuperMini-green)
 ![License](https://img.shields.io/badge/license-MIT-brightgreen)
 
@@ -105,14 +105,16 @@ Landis+Gyr E450 Meter
 
 ### 1. ESPHome Version
 
-You need **ESPHome 2026.6.0 or later** which includes the native `dlms_meter` component.
+You need **ESPHome 2026.11.0 or later**. The native `dlms_meter` component includes Cyprus E450 support from this release, so no external components or patches are needed.
 
 - **ESPHome Device Builder (Desktop app):** Download from [esphome.io](https://esphome.io). If the stable channel still shows an older version, switch to the **beta channel** via the system tray icon.
 - **Home Assistant Add-on:** Update via Settings → Add-ons → ESPHome → Update.
 
-### 2. Critical: ESPHome PR Fix
+### 2. Older ESPHome versions (2026.6.0 – 2026.10.x only)
 
-The standard `dlms_meter` component does not correctly parse the specific HDLC frame variant used by the Cyprus E450 meter. Without this fix, all sensor values will read as zero even when the meter is broadcasting correctly. Add the following block to your configuration:
+Support for the Cyprus E450 HDLC frame variant was added in [PR #16942](https://github.com/esphome/esphome/pull/16942) and **shipped in ESPHome 2026.11.0**. If you can update, do that and skip this step.
+
+On 2026.6.0 – 2026.10.x the standard `dlms_meter` component cannot parse this meter and every value reads as zero. As a workaround, add this block to your configuration and **remove it after upgrading to 2026.11.0+**:
 
 ```yaml
 external_components:
@@ -120,8 +122,6 @@ external_components:
     components: [dlms_meter]
     refresh: 1s
 ```
-
-> Once [PR #16942](https://github.com/esphome/esphome/pull/16942) is merged into ESPHome mainline, this `external_components` block can be removed.
 
 ### 3. secrets.yaml
 
@@ -166,7 +166,7 @@ The EAC Cyprus E450 broadcasts three distinct frame types:
 | Parity | NONE |
 | Data bits | 8 |
 | Stop bits | 1 |
-| Frame format | HDLC (Cyprus-specific variant — requires PR #16942) |
+| Frame format | HDLC (Cyprus-specific variant — supported natively from ESPHome 2026.11.0) |
 | Encryption | None |
 | receive_timeout | 1500ms (prevents spurious timeout warnings at minute boundaries) |
 
@@ -282,10 +282,8 @@ MP1584 OUT+ (3.3V)  →  M-Bus module VCC (or use separate 5V source for module)
 - After EAC pushes the update, a meter power cycle by EAC may be required
 
 ### Sensors show 0 for everything including voltage
-- The `external_components` PR #16942 fix is missing or not applied correctly — this is the most common issue
-- The standard `dlms_meter` component cannot parse the Cyprus E450 HDLC frame variant and returns zeros for all values
+- Check your ESPHome version. Before 2026.11.0 the standard `dlms_meter` component cannot parse the Cyprus E450 HDLC frame variant and returns zeros for all values — update to 2026.11.0+, or use the `external_components` workaround from the Software Setup section
 - Verify `parity: NONE` (not EVEN)
-- Verify ESPHome version is 2026.6.0+
 
 ### No data at all / complete silence in logs
 - Check M-Bus module VCC is receiving 5V (not 3.3V)
@@ -294,9 +292,16 @@ MP1584 OUT+ (3.3V)  →  M-Bus module VCC (or use separate 5V source for module)
 - Confirm RJ11 plug is firmly seated in the meter's RJ12 socket
 - M-Bus terminals are polarity-insensitive — try swapping the two wires
 
-### Timeout warnings appearing every minute in logs
-- This is caused by the large 1057-byte billing frame at minute boundaries
-- Add `receive_timeout: 1500ms` to the `dlms_meter:` block — already included in the provided YAMLs
+### HDLC frame warnings appearing every minute in logs
+You will see one of these warnings every minute — this is a **known meter firmware bug**, not a software issue:
+```
+[W][dlms_meter:021]: HDLC: incomplete frame at offset 656
+[W][dlms_meter:021]: HDLC: invalid frame at offset 726
+[W][dlms_meter:021]: HDLC: FCS error
+```
+The EAC Cyprus E450 meter has two independent M-Bus push schedulers running without coordination. One transmits every 5 seconds and another every ~2 seconds. Most of the time their transmission windows do not overlap, but once per minute they collide, causing two HDLC frames to be concatenated in the UART buffer. The parser correctly rejects the corrupted combined frame. **All sensors continue updating correctly** — the warning is purely cosmetic and there is no workaround since the bug is in the meter firmware itself.
+
+The provided YAML uses `receive_timeout: 1500ms` which is the most stable setting. Do **not** increase this value — higher timeouts cause RX buffer overflow on this meter due to its 5-second push interval.
 
 ### WiFi connecting and disconnecting repeatedly
 - Add `fast_connect: true` to your wifi config
@@ -316,9 +321,14 @@ MP1584 OUT+ (3.3V)  →  M-Bus module VCC (or use separate 5V source for module)
 
 ## Known Issues
 
-- **PR #16942 not yet merged:** The Cyprus E450 HDLC frame fix is in a pending ESPHome pull request. The `external_components` workaround is required until it merges into mainline. Track progress at [github.com/esphome/esphome/pull/16942](https://github.com/esphome/esphome/pull/16942).
+- **Cyprus E450 support requires ESPHome 2026.11.0+:** [PR #16942](https://github.com/esphome/esphome/pull/16942) was merged and shipped in 2026.11.0. Older versions need the `external_components` workaround described in Software Setup.
+
+- **HDLC frame warning every minute — meter firmware bug:** The EAC Cyprus E450 meter runs two independent M-Bus push schedulers without coordination. One transmits every 5 seconds and another every ~2 seconds. Once per minute their transmission windows collide, causing two HDLC frames to be received simultaneously and concatenated in the UART buffer. The `dlms_meter` component correctly rejects the corrupted combined frame with a warning. All sensors continue working correctly — confirmed by ESPHome PR #16942 author [@PolarGoose](https://github.com/PolarGoose). There is no software workaround as the bug is in the meter firmware itself.
+
 - **Deep sleep + power banks:** Most power banks auto-shutoff during deep sleep. Use a raw LiPo for permanent installs.
+
 - **EAC activation:** The M-Bus port must be explicitly enabled by EAC on older meter installations. Newer meters (post mid-2025) may have it enabled by default.
+
 - **Three phase L2/L3 sensors:** Not tested by the original author (single phase installation). Community feedback welcome.
 
 ---
@@ -336,14 +346,14 @@ MP1584 OUT+ (3.3V)  →  M-Bus module VCC (or use separate 5V source for module)
 | Frame format | HDLC (Cyprus-specific variant) |
 | Encryption | None |
 | Push interval | ~5 seconds (Frame 1), ~10 seconds (Frame 2), ~60 seconds (Frame 3) |
-| ESPHome version | 2026.6.0b1+ |
+| ESPHome version | 2026.11.0+ (2026.6.0+ with the `external_components` workaround) |
 | ESP32 board | ESP32-C6 SuperMini |
 
 ---
 
 ## Credits
 
-- [PR #16942](https://github.com/esphome/esphome/pull/16942) by [@PolarGoose](https://github.com/PolarGoose) — Cyprus E450 HDLC frame format fix without which this would not work
+- [PR #16942](https://github.com/esphome/esphome/pull/16942) by [@PolarGoose](https://github.com/PolarGoose) — Cyprus E450 HDLC frame format support, merged in ESPHome 2026.11.0. Without this work none of this would function
 - ESPHome `dlms_meter` component contributors
 - EAC Cyprus engineering team for technical assistance during testing
 - Home Assistant and ESPHome communities
